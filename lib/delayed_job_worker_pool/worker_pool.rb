@@ -23,7 +23,7 @@ module DelayedJobWorkerPool
 
       log_uninheritable_threads
 
-      num_workers.times { fork_worker }
+      num_domains.each { |domain_name| fork_worker(domain_name) }
 
       monitor_workers
 
@@ -95,8 +95,9 @@ module DelayedJobWorkerPool
 
       log("Worker #{worker_pid} exited with status #{status.to_i}")
       worker_pids.delete(worker_pid)
+      domain_name = worker_info(worker_pid).domain_name
       invoke_callback(:after_worker_shutdown, worker_info(worker_pid))
-      fork_worker unless shutting_down
+      fork_worker(domain_name) unless shutting_down
     end
 
     def has_workers?
@@ -111,14 +112,14 @@ module DelayedJobWorkerPool
       options[callback_name].call(*args) if options[callback_name]
     end
 
-    def fork_worker
-      worker_pid = Kernel.fork { run_worker }
+    def fork_worker(domain_name)
+      worker_pid = Kernel.fork { run_worker(domain_name) }
       worker_pids << worker_pid
       log("Started worker #{worker_pid}")
-      invoke_callback(:after_worker_boot, worker_info(worker_pid))
+      invoke_callback(:after_worker_boot, worker_info(worker_pid, domain_name))
     end
 
-    def run_worker
+    def run_worker(domain_name)
       master_alive_write_pipe.close
 
       uninstall_signal_handlers
@@ -131,7 +132,7 @@ module DelayedJobWorkerPool
 
       load_app unless preload_app?
 
-      invoke_callback(:on_worker_boot, worker_info(Process.pid))
+      invoke_callback(:on_worker_boot, worker_info(Process.pid, domain_name))
 
       DelayedJobWorkerPool::Worker.run(worker_options(Process.pid))
     rescue => e
@@ -139,8 +140,8 @@ module DelayedJobWorkerPool
       exit(1)
     end
 
-    def worker_info(worker_pid)
-      DelayedJobWorkerPool::WorkerInfo.new(name: worker_name(worker_pid), process_id: worker_pid)
+    def worker_info(worker_pid, domain_name='')
+      DelayedJobWorkerPool::WorkerInfo.new(name: worker_name(worker_pid), process_id: worker_pid, domain_name: domain_name)
     end
 
     def worker_name(worker_pid)
@@ -149,6 +150,10 @@ module DelayedJobWorkerPool
 
     def num_workers
       options.fetch(:workers, 1)
+    end
+
+    def num_domains
+      options.fetch(:domains, 1)
     end
 
     def preload_app?
